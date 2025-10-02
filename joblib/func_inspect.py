@@ -9,7 +9,10 @@ My own variation on function-specific inspect-like features.
 import collections
 import inspect
 import os
+import re
 import warnings
+from itertools import islice
+from tokenize import open as open_py_source
 
 from .logger import pformat
 
@@ -25,7 +28,8 @@ def get_func_code(func):
     Returns
     -------
     func_code: string
-        The function code
+        The function code. Not necessarily executable, but suitable for detecting
+        code changes.
     source_file: string
         The path to the file in which the function is defined.
     first_line: int
@@ -37,24 +41,44 @@ def get_func_code(func):
     more robust.
     """
     source_file = None
-    # Ignore wrappers.
-    while hasattr(func, "__wrapped__"):
-        func = func.__wrapped__
+    first_line = -1
     try:
-        source_file = inspect.getsourcefile(func)
-        code, first_line = inspect.getsourcelines(func)
-        return "".join(code), source_file, first_line
+        code = func.__code__
+        source_file = code.co_filename
+        if not os.path.exists(source_file):
+            # Use inspect for lambda functions and functions defined in an
+            # interactive shell, or in doctests
+            code = "".join(inspect.getsourcelines(func)[0])
+            line_no = 1
+            if source_file.startswith("<doctest "):
+                source_file, line_no = re.match(
+                    r"\<doctest (.*\.rst)\[(.*)\]\>", source_file
+                ).groups()
+                first_line = int(line_no)
+                source_file = "<doctest %s>" % source_file
+        else:
+            # Try to retrieve the source code.
+            with open_py_source(source_file) as source_file_obj:
+                first_line = code.co_firstlineno
+                # All the lines after the function definition:
+                source_lines = list(islice(source_file_obj, first_line - 1, None))
+            code = "".join(inspect.getblock(source_lines))
     except Exception:
         # might change from one session to another.
         if hasattr(func, "__code__"):
             # Python 3.X
-            return str(func.__code__.__hash__()), source_file, -1
+            code = str(func.__code__.__hash__())
         else:
             # Weird objects like numpy ufunc don't have __code__
             # This is fragile, as quite often the id of the object is
             # in the repr, so it might not persist across sessions,
             # however it will work for ufuncs.
-            return repr(func), source_file, -1
+            code = repr(func)
+    # If this function is a wrapper, the primary target is the wrapped function.
+    if hasattr(func, "__wrapped__"):
+        wrapped_code, source_file, first_line = get_func_code(func.__wrapped__)
+        code += "\n" + wrapped_code
+    return code, source_file, first_line
 
 
 def _clean_win_chars(string):

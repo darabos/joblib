@@ -346,11 +346,49 @@ def dummy_decorator(func):
     return inner
 
 
-def test_decorated_functions():
+def test_decorated_function_changing():
     # Non-regression test for https://github.com/joblib/joblib/issues/1371
+    @dummy_decorator
     def func():
         return 1 + 1
 
-    code = get_func_code(func)
-    decorated_code = get_func_code(dummy_decorator(func))
-    assert code == decorated_code
+    code1 = get_func_code(func)
+
+    @dummy_decorator
+    def func():
+        return 2 + 2
+
+    code2 = get_func_code(func)
+    assert code1[0] != code2[0]
+    assert code1[2] != code2[2]
+
+
+def test_decorator_function_changing():
+    # Non-regression test for https://github.com/joblib/joblib/issues/1371
+    def local_decorator(func):
+        @functools.wraps(func)
+        def inner(*args, **kwargs):
+            return func(*args, **kwargs)
+
+        return inner
+
+    @local_decorator
+    def func():
+        return 1 + 1
+
+    code1 = get_func_code(func)
+
+    def local_decorator(func):
+        @functools.wraps(func)
+        def inner():
+            return "NOTHING"
+
+        return inner
+
+    @local_decorator
+    def func():
+        return 1 + 1
+
+    code2 = get_func_code(func)
+    assert code1[0] != code2[0]
+    assert code1[2] != code2[2]
